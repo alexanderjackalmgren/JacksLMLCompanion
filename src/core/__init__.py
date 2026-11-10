@@ -29,6 +29,20 @@ def app_data_dir() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def resource_dir() -> Path:
+    """Bundled read-only assets (icons, banners).
+
+    In a PyInstaller one-file build this is ``sys._MEIPASS``. In development it
+    is the project root.
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass)
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
 def assert_within(parent: Path, child: Path) -> Path:
     """Return the resolved child, or raise if it escapes ``parent``."""
     parent_resolved = parent.resolve()

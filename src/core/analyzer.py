@@ -1,9 +1,8 @@
 """Archive extraction, install.xml parsing, and install routing.
 
-LML assets are staged under ``lml/<mod folder>``. Root ``.asi``, ``.dll``, and
-``.ini`` files are staged in the game folder. Game-internal paths declared by
-``install.xml`` stay inside the LML mod folder so the virtual file system can
-overlay them without replacing shipped game files.
+Archives with ``install.xml`` use LML-aware routing. Archives without it are
+treated as manual mods: the UI asks whether to install to the game root or an
+LML folder. Generated ``install.xml`` is only written for the LML choice.
 """
 
 from __future__ import annotations
@@ -20,8 +19,18 @@ from typing import Literal
 from core import CompanionError, GameDirectoryError, assert_within
 
 FileKind = Literal["lml", "root"]
+PlacementMode = Literal["root", "lml"]
 ROOT_SCRIPT_SUFFIXES = {".asi", ".dll", ".ini"}
 SKIP_NAMES = {"thumbs.db", "desktop.ini", ".ds_store"}
+README_NAMES = {
+    "readme",
+    "readme.txt",
+    "readme.md",
+    "read me.txt",
+    "read_me.txt",
+    "install.txt",
+    "installation.txt",
+}
 MAX_ARCHIVE_FILES = 5000
 
 
@@ -52,6 +61,9 @@ class StagedInstall:
     game_dir: Path
     files: list[PlannedFile]
     warnings: list[str] = field(default_factory=list)
+    needs_placement_choice: bool = False
+    readme_path: Path | None = None
+    has_install_xml: bool = False
 
 
 @dataclass
@@ -89,31 +101,78 @@ class ModAnalyzer:
             extract_archive(archive, staging_dir)
             _unwrap_single_root(staging_dir)
             xml_info = _read_install_xml(staging_dir, _display_name(archive.stem))
+            has_install_xml = xml_info.metadata is not None
             metadata = xml_info.metadata or ModMetadata(
                 name=_display_name(archive.stem),
                 author="Unknown",
                 version="0.0.0",
                 generated=True,
             )
-            files = _route_tree(staging_dir, metadata, xml_info.destinations)
-            _ensure_baseline_xml(staging_dir, metadata, files)
-            if not files:
-                raise ArchiveError("Archive does not contain any installable files.")
             warnings = [xml_info.warning] if xml_info.warning else []
+            readme_path = _find_readme(staging_dir)
+            if has_install_xml:
+                files = _route_tree(staging_dir, metadata, xml_info.destinations)
+                _ensure_baseline_xml(staging_dir, metadata, files)
+                if not files:
+                    raise ArchiveError("Archive does not contain any installable files.")
+                return StagedInstall(
+                    metadata=metadata,
+                    archive_source=archive,
+                    staging_dir=staging_dir,
+                    game_dir=game_dir,
+                    files=files,
+                    warnings=warnings,
+                    needs_placement_choice=False,
+                    readme_path=readme_path,
+                    has_install_xml=True,
+                )
+            pending = _collect_source_files(staging_dir)
+            if not pending:
+                raise ArchiveError("Archive does not contain any installable files.")
+            warnings.append(
+                "No install.xml found. Choose game root or LML before files are copied."
+            )
             return StagedInstall(
                 metadata=metadata,
                 archive_source=archive,
                 staging_dir=staging_dir,
                 game_dir=game_dir,
-                files=files,
+                files=[],
                 warnings=warnings,
+                needs_placement_choice=True,
+                readme_path=readme_path,
+                has_install_xml=False,
             )
         except Exception:
             shutil.rmtree(staging_dir, ignore_errors=True)
             raise
 
+    def apply_placement(self, staged: StagedInstall, mode: PlacementMode) -> None:
+        """Resolve destinations for a manual mod after the user chooses root or LML."""
+        if not staged.needs_placement_choice:
+            raise ArchiveError("This mod already has an install plan.")
+        sources = _collect_source_files(staged.staging_dir)
+        if not sources:
+            raise ArchiveError("Archive does not contain any installable files.")
+        if mode == "root":
+            planned: list[PlannedFile] = []
+            for source in sources:
+                relative = source.relative_to(staged.staging_dir)
+                if relative.name.casefold() == "rdr2.exe":
+                    raise ArchiveError("Refusing to stage a replacement RDR2.exe.")
+                planned.append(PlannedFile(source, relative, "root"))
+            staged.files = planned
+        else:
+            staged.files = _route_tree(staged.staging_dir, staged.metadata, {})
+            _ensure_baseline_xml(staged.staging_dir, staged.metadata, staged.files)
+        if not staged.files:
+            raise ArchiveError("Archive does not contain any installable files.")
+        staged.needs_placement_choice = False
+
     def place(self, staged: StagedInstall) -> list[Path]:
         """Copy staged files into the game folder. Rolls back copies on failure."""
+        if staged.needs_placement_choice or not staged.files:
+            raise ArchiveError("Choose where to install this mod before copying files.")
         written: list[Path] = []
         try:
             for planned in staged.files:
@@ -173,6 +232,12 @@ def _extract_rar(archive: Path, destination: Path) -> None:
         import rarfile
     except ImportError as exc:
         raise ArchiveError("RAR archives need the rarfile package.") from exc
+    from core.rar_support import RarSupportError, ensure_rar_backend
+
+    try:
+        ensure_rar_backend()
+    except RarSupportError as exc:
+        raise ArchiveError(str(exc)) from exc
     destination = destination.resolve()
     try:
         with rarfile.RarFile(archive) as bundle:
@@ -184,9 +249,13 @@ def _extract_rar(archive: Path, destination: Path) -> None:
             bundle.extractall(destination)
     except ArchiveError:
         raise
+    except rarfile.RarCannotExec as exc:
+        raise ArchiveError(
+            "Could not run a RAR extractor. Install 7-Zip or UnRAR and retry."
+        ) from exc
     except Exception as exc:
         raise ArchiveError(
-            "Could not read that RAR archive. Install UnRAR and confirm the file is not damaged."
+            "Could not read that RAR archive. Confirm the file is not damaged."
         ) from exc
 
 
@@ -237,23 +306,58 @@ def _read_install_xml(staging: Path, fallback_name: str) -> _XmlInfo:
         return _XmlInfo(warning=f"Ignored unreadable install.xml: {install_xml.name}")
 
     name = _xml_text(root, "name") or fallback_name
+    author = _xml_text(root, "author") or "Unknown"
+    version = _xml_text(root, "version") or "0.0.0"
     metadata = ModMetadata(
         name=_safe_folder_name(name),
-        author=_xml_text(root, "author") or "Unknown",
-        version=_xml_text(root, "version") or "0.0.0",
+        author=author,
+        version=version,
         generated=not bool(_xml_text(root, "name")),
     )
     destinations: dict[str, Path] = {}
-    for node in root.iter("file"):
-        source = (node.findtext("source") or "").strip().replace("\\", "/")
-        declared = (node.findtext("destination") or "").strip().replace("\\", "/")
+    # Legacy/simple manifests.
+    for node in _xml_elements(root, "file"):
+        source = (_xml_child_text(node, "source") or "").strip().replace("\\", "/")
+        declared = (_xml_child_text(node, "destination") or "").strip().replace("\\", "/")
         if not source or not declared:
             continue
         try:
             destinations[_rel_key(Path(source))] = _safe_relative(declared)
         except ArchiveError as exc:
             return _XmlInfo(metadata=metadata, warning=str(exc))
+    # Lenny EasyInstall FileReplacement entries (FilePath is the mod-local file).
+    for node in _xml_elements(root, "FileReplacement"):
+        source = (_xml_child_text(node, "FilePath") or "").strip().replace("\\", "/")
+        if not source:
+            continue
+        try:
+            destinations[_rel_key(Path(source))] = _safe_relative(source)
+        except ArchiveError as exc:
+            return _XmlInfo(metadata=metadata, warning=str(exc))
     return _XmlInfo(metadata=metadata, destinations=destinations)
+
+
+def _collect_source_files(staging: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in staging.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(staging)
+        if _ignored(relative):
+            continue
+        files.append(path)
+    return files
+
+
+def _find_readme(staging: Path) -> Path | None:
+    candidates: list[Path] = []
+    for path in _collect_source_files(staging):
+        name = path.name.casefold()
+        if name in README_NAMES or name.startswith("readme"):
+            candidates.append(path)
+    if not candidates:
+        return None
+    return min(candidates, key=lambda path: (len(path.relative_to(staging).parts), path.name.casefold()))
 
 
 def _route_tree(
@@ -263,12 +367,8 @@ def _route_tree(
 ) -> list[PlannedFile]:
     mod_folder = _safe_folder_name(metadata.name)
     planned: list[PlannedFile] = []
-    for path in staging.rglob("*"):
-        if not path.is_file():
-            continue
+    for path in _collect_source_files(staging):
         relative = path.relative_to(staging)
-        if _ignored(relative):
-            continue
         declared = destinations.get(_rel_key(relative))
         kind, destination = _route_destination(relative, declared, mod_folder)
         if kind == "root" and path.name.casefold() == "rdr2.exe":
@@ -334,8 +434,32 @@ def _safe_relative(value: str) -> Path:
     return relative
 
 
+def _xml_local_name(tag: str) -> str:
+    if "}" in tag:
+        return tag.rsplit("}", 1)[-1]
+    return tag
+
+
+def _xml_elements(root: ET.Element, tag: str) -> list[ET.Element]:
+    wanted = tag.casefold()
+    return [
+        node
+        for node in root.iter()
+        if _xml_local_name(node.tag).casefold() == wanted
+    ]
+
+
+def _xml_child_text(node: ET.Element, tag: str) -> str:
+    wanted = tag.casefold()
+    for child in list(node):
+        if _xml_local_name(child.tag).casefold() == wanted and child.text and child.text.strip():
+            return child.text.strip()
+    return ""
+
+
 def _xml_text(root: ET.Element, tag: str) -> str:
-    for node in root.iter(tag):
+    """Read the first matching element text, case-insensitive (EasyInstall uses PascalCase)."""
+    for node in _xml_elements(root, tag):
         if node.text and node.text.strip():
             return node.text.strip()
     return ""

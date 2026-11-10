@@ -1,6 +1,7 @@
-"""Switch between Modded Story, Vanilla Online, and RedM.
+"""Switch between Modded Story and Vanilla Online.
 
-Online and RedM quarantine the ASI loader and root ``.asi`` plugins by
+Online mode quarantines the ASI loader, root ``.asi`` plugins, and known
+DLL injectors (including DLSSTweaks ``xinput9_1_0.dll`` / ``nvngx.dll``) by
 renaming them with a ``.off`` suffix. Files under ``lml/`` are left in place.
 Modded Story restores those quarantined names. Both the active file and the
 ``.off`` file are never deleted; if both exist, the switch stops.
@@ -19,7 +20,6 @@ from core import CompanionError, GameDirectoryError, app_data_dir
 class Profile(Enum):
     MODDED_STORY = "modded_story"
     VANILLA_ONLINE = "vanilla_online"
-    REDM = "redm"
 
     @property
     def label(self) -> str:
@@ -29,8 +29,16 @@ class Profile(Enum):
 _LABELS = {
     Profile.MODDED_STORY: "Modded Story",
     Profile.VANILLA_ONLINE: "Vanilla Online",
-    Profile.REDM: "RedM",
 }
+
+# Exact game-root DLL names quarantined alongside *.asi (case-insensitive).
+_ROOT_LOADERS = (
+    "dinput8.dll",
+    "xinput9_1_0.dll",
+    "nvngx.dll",
+)
+_ROOT_LOADERS_FOLD = frozenset(name.casefold() for name in _ROOT_LOADERS)
+_ROOT_LOADERS_OFF_FOLD = frozenset(f"{name}.off" for name in _ROOT_LOADERS_FOLD)
 
 
 class ProfileError(CompanionError):
@@ -68,7 +76,10 @@ class ProfileSwitcher:
             return Profile.MODDED_STORY
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
-            return Profile(data["active_profile"])
+            value = data["active_profile"]
+            if value == "redm":
+                return Profile.VANILLA_ONLINE
+            return Profile(value)
         except (OSError, json.JSONDecodeError, KeyError, ValueError):
             return Profile.MODDED_STORY
 
@@ -180,34 +191,35 @@ def _pair(active: Path, parked: Path, enable: bool) -> FileAction:
 
 
 def _active_files(game_dir: Path) -> list[Path]:
-    return _files_named(game_dir, loader="dinput8.dll", suffix=".asi")
+    return _quarantine_targets(game_dir, parked=False)
 
 
 def _parked_files(game_dir: Path) -> list[Path]:
-    return _files_named(game_dir, loader="dinput8.dll.off", suffix=".asi.off")
+    return _quarantine_targets(game_dir, parked=True)
 
 
-def _files_named(game_dir: Path, loader: str, suffix: str) -> list[Path]:
+def _quarantine_targets(game_dir: Path, *, parked: bool) -> list[Path]:
     found: list[Path] = []
     for path in game_dir.iterdir():
         if not path.is_file():
             continue
         name = path.name.casefold()
-        if name == loader or name.endswith(suffix):
+        if parked:
+            if name in _ROOT_LOADERS_OFF_FOLD or name.endswith(".asi.off"):
+                found.append(path)
+        elif name in _ROOT_LOADERS_FOLD or name.endswith(".asi"):
             found.append(path)
     return sorted(found, key=lambda item: item.name.casefold())
 
 
 def _notes(profile: Profile) -> list[str]:
     if profile is Profile.MODDED_STORY:
-        return ["ScriptHookRDR2 V2's ASI loader and root .asi plugins are restored."]
-    if profile is Profile.VANILLA_ONLINE:
         return [
-            "ASI loaders and root .asi plugins are renamed with a .off suffix so online mode will not load them.",
-            "Files under lml/ were left in place.",
+            "ASI loader, root .asi plugins, and DLSSTweaks injectors "
+            "(xinput9_1_0.dll / nvngx.dll) are restored."
         ]
     return [
-        "Single-player script loaders are quarantined.",
-        "Point the RedM client at this game folder. Automatic client linking is not set up yet.",
+        "ASI loader, root .asi plugins, and DLSSTweaks injectors "
+        "(xinput9_1_0.dll / nvngx.dll) are renamed with a .off suffix so online mode will not load them.",
         "Files under lml/ were left in place.",
     ]

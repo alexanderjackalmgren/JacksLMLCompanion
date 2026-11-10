@@ -3,7 +3,13 @@ JacksLMLCompanion/
 ├── .gitignore
 ├── README.md
 ├── requirements.txt
+├── JacksLMLCompanion.spec     # PyInstaller one-file build
 ├── Project Directory Structure.md
+├── assets/
+│   ├── app_icon.ico
+│   ├── app_icon.png
+│   ├── library_hero_storymode.tif
+│   └── library_hero_onlinemode.tif
 ├── docs/
 │   ├── additional.md
 │   ├── architecture.md
@@ -18,7 +24,7 @@ JacksLMLCompanion/
 │   │   ├── diagnostics.py     # crash-main.log forensics
 │   │   ├── infrastructure.py  # Game-folder validation and core binary deploy
 │   │   ├── manifest.py        # JSON manifests and clean uninstall
-│   │   └── profiles.py        # Modded Story, Vanilla Online, and RedM
+│   │   └── profiles.py        # Modded Story / Vanilla Online mode switch
 │   └── ui/
 │       ├── __init__.py
 │       └── main_window.py

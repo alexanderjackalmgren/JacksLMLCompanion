@@ -8,8 +8,12 @@ venv/
 .vscode/
 dist/
 build/
-*.spec
 config.json
 profile_state.json
 mod_manifests/
 staging/
+cache/
+tools/
+# Prefer assets/ copies; ignore loose root duplicates if present
+/library_hero*.tif
+/library_hero*.tiff

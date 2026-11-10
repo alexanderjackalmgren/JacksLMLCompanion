@@ -8,17 +8,19 @@
   - `ScriptHookRDR2.dll` from **ScriptHookRDR2 V2** (kepmehz / Nexus)
   - `dinput8.dll` from **Ultimate ASI Loader x64** (ThirteenAG)
   - `vfs.asi` from **Lenny's Mod Loader RDR** (`lml_rdr_beta_11.zip` via rdr2mods.com)
-  - `ScriptHookRDRDotNet.asi` from **ScriptHookRDR2DotNet 1.0.5.5**
+  - `ScriptHookRDRDotNet.asi` from **ScriptHookRDR2DotNet**
 - When a package contains both x64 and Win32 ASI loaders, only the x64 copy is deployed.
+- **Install missing infrastructure** auto-downloads Ultimate ASI Loader x64 and ScriptHookRDR2DotNet from GitHub, then guides a manual download for ScriptHookRDR2 V2 (Nexus) and Lenny's Mod Loader (rdr2mods.com). Manual steps keep the app in front: the user opens the download page from a button, then selects the archive. Quarantined binaries count as present.
+- **Optional addon:** DLSSTweaks for RDR2 (`xinput9_1_0.dll`, `dlsstweaks.ini`, `DLSSTweaksConfig.exe`). Manual Nexus download of file “1. DLSSTweaks for RDR2”; offered during infrastructure install and via a dedicated button. After deploy, the UI can open `DLSSTweaksConfig.exe` so the user sets ForceDLAA, then reminds them to enable DLSS and zero sharpening in-game.
+- RAR packages bootstrap a backend automatically (existing UnRAR/7-Zip, otherwise free UnRAR from rarlab.com into `tools/`).
 - Triggers `diagnostics.py` to check for recent crash logs (`crash-main.log`) if a crash occurred on the previous session.
 
 ### B. Ingestion, XML Parsing & Normalization (`analyzer.py`)
 - User selects or drops a `.zip` or `.rar` mod archive.
 - Extracted to a temporary staging directory (`tmp_extract_<mod_name>`).
-- **Metadata Parsing:** Scans the extracted tree for `install.xml` via `xml.etree.ElementTree` to extract mod name, author, and version. If missing, auto-generates a baseline structure.
-- **Heuristic Routing:**
-  - **LML Routing:** Routes custom assets into `<game_dir>/lml/<mod_path>`.
-  - **Root Scripts:** Routes `.asi`, `.dll`, or `.ini` files directly to `<game_dir>/`.
+- **Metadata Parsing:** Scans the extracted tree for `install.xml` via `xml.etree.ElementTree` to extract mod name, author, and version.
+- **With `install.xml`:** LML-aware routing. Custom assets go under `<game_dir>/lml/<mod_path>`; declared root scripts stay in the game root.
+- **Without `install.xml`:** Treated as a manual mod. The UI can open a readme if present, then asks whether to install to the **game root** (preserve archive layout) or an **LML folder** (and only then generate a baseline `install.xml`).
 
 ### C. Collision Detection Engine (`collision.py`)
 - Maps out incoming file target paths before copying bytes.
@@ -33,10 +35,9 @@
   - `archive_source`: Original filename
   - `files`: Array of absolute paths written to disk
 
-### E. Virtual Profiles & RedM Switcher (`profiles.py`)
-- **Modded Story Mode:** Restores active LML hooks (`vfs.asi`), renames ASI loaders back to active extensions (`dinput8.dll`), and loads active mod manifests.
-- **Vanilla Online Mode:** Safely quarantines ASI loaders and LML virtual file system files (`.asi` $\rightarrow$ `.off`), ensuring zero risk of triggering Rockstar's anti-cheat.
-- **RedM Mode:** Ensures single-player script loaders are safely disabled and links base game assets to the RedM client configuration.
+### E. Story / Online Mode Switcher (`profiles.py`)
+- **Modded Story Mode:** Restores active LML hooks (`vfs.asi`), ASI loaders (`dinput8.dll`), and DLSSTweaks injectors.
+- **Vanilla Online Mode:** Safely quarantines ASI loaders, LML virtual file system files (`.asi` → `.off`), and DLSSTweaks injectors (`xinput9_1_0.dll` / `nvngx.dll`), so online play does not load them.
 
 ---
 

@@ -1,7 +1,7 @@
 # Cursor Rules for Jack's LML Companion
 
 ## Project Overview
-A standalone desktop application built with Python and PyQt6 named **Jack's LML Companion**, serving as an advanced, all-in-one drop-in replacement for `ModManager.UI.exe` for Red Dead Redemption 2 (RDR2) and RedM.
+A standalone desktop application built with Python and PyQt6 named **Jack's LML Companion**, serving as an advanced, all-in-one drop-in replacement for `ModManager.UI.exe` for Red Dead Redemption 2 (RDR2).
 
 ## Technical Stack
 - **Language:** Python 3.10+
@@ -16,6 +16,6 @@ A standalone desktop application built with Python and PyQt6 named **Jack's LML 
 2. **Path Safety:** Always use `pathlib.Path` for cross-platform path manipulation and file system checks. Never use hardcoded slashes.
 3. **Manifest-Driven Clean Uninstalls:** Every installed mod *must* generate a JSON manifest in `mod_manifests/` tracking absolute file paths to guarantee zero orphaned files during removal.
 4. **Collision Detection (`collision.py`):** Intercept root script overwrites or duplicate LML mod folders before files touch disk.
-5. **Infrastructure Automation (`infrastructure.py`):** Scan, download, and deploy the standard stack on startup: **ScriptHookRDR2 V2** (`ScriptHookRDR2.dll`), **Ultimate ASI Loader x64** (`dinput8.dll` from ThirteenAG), **Lenny's Mod Loader RDR** (`vfs.asi`), and **ScriptHookRDR2DotNet 1.0.5.5**. Prefer ScriptHookRDR2 V2 over Alexander Blade's original Script Hook. Always prefer the x64 ASI loader.
+5. **Infrastructure Automation (`infrastructure.py`):** Scan, download, and deploy the standard stack on startup: **ScriptHookRDR2 V2** (`ScriptHookRDR2.dll`), **Ultimate ASI Loader x64** (`dinput8.dll` from ThirteenAG), **Lenny's Mod Loader RDR** (`vfs.asi`), and **ScriptHookRDR2DotNet**. Prefer ScriptHookRDR2 V2 over Alexander Blade's original Script Hook. Always prefer the x64 ASI loader.
 6. **Crash Log Forensics (`diagnostics.py`):** Parse fresh RDR2 crash logs on startup to identify version mismatches or VFS injection failures and suggest fixes.
-7. **Virtual Profiles & RedM Switcher (`profiles.py`):** Manage instant switching between **Modded Story**, **Vanilla Online** (by safely quarantining ASI loaders and LML hooks), and **RedM** environments.
+7. **Story / Online Mode Switcher (`profiles.py`):** Instant switching between **Modded Story** and **Vanilla Online** by safely quarantining ASI loaders, LML hooks, and DLSSTweaks injectors.

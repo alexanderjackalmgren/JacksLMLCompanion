@@ -4,11 +4,14 @@ Standard packages:
 - ScriptHookRDR2 V2 (kepmehz) for ``ScriptHookRDR2.dll``
 - ThirteenAG Ultimate ASI Loader **x64** ``dinput8.dll``
 - Lenny's Mod Loader RDR (``vfs.asi`` and friends)
-- ScriptHookRDR2DotNet 1.0.5.5 for .NET scripts
+- ScriptHookRDR2DotNet for .NET scripts (download URL may pin a release)
 
-Packages are versioned and are not downloaded automatically yet. Use the
-catalog URLs, then deploy the downloaded folder or archive. CDN links for LML
-expire, so only the stable rdr2mods.com page is stored for that package.
+Optional addons:
+- DLSSTweaks for RDR2 (``xinput9_1_0.dll`` + ``dlsstweaks.ini``)
+
+GitHub packages (ASI Loader, DotNet) can be downloaded automatically. ScriptHook
+V2 (Nexus), LML (expiring CDN links), and DLSSTweaks stay manual: open the page,
+then pick the downloaded archive.
 """
 
 from __future__ import annotations
@@ -16,8 +19,10 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from core import CompanionError, GameDirectoryError, app_data_dir
 
@@ -45,12 +50,25 @@ DOTNET_DOWNLOAD = (
     f"{DOTNET_VERSION}/ScriptHookRDR2DotNet.rar"
 )
 
+DLSS_TWEAKS_LABEL = "DLSSTweaks (optional)"
+DLSS_TWEAKS_PAGE = "https://www.nexusmods.com/reddeadredemption2/mods/2072"
+DLSS_TWEAKS_EXPECTED = "1. DLSSTweaks for RDR2 (.zip)"
+DLSS_TWEAKS_CORE = ("xinput9_1_0.dll", "dlsstweaks.ini")
+DLSS_TWEAKS_FILES = (
+    "xinput9_1_0.dll",
+    "dlsstweaks.ini",
+    "DLSSTweaksConfig.exe",
+)
+
+DOWNLOAD_TIMEOUT_SECONDS = 120
+
 
 @dataclass(frozen=True)
 class PackageSource:
     key: str
     label: str
     homepage: str
+    provides: tuple[str, ...]
     download_url: str | None = None
     expected_archive: str | None = None
 
@@ -60,11 +78,13 @@ STANDARD_PACKAGES: tuple[PackageSource, ...] = (
         key="scripthook_v2",
         label=SCRIPT_HOOK_LABEL,
         homepage=SCRIPT_HOOK_PAGE,
+        provides=("ScriptHookRDR2.dll",),
     ),
     PackageSource(
         key="asi_loader_x64",
         label=ASI_LOADER_LABEL,
         homepage=ASI_LOADER_PAGE,
+        provides=("dinput8.dll",),
         download_url=ASI_LOADER_DOWNLOAD,
         expected_archive="dinput8-x64.zip",
     ),
@@ -72,22 +92,34 @@ STANDARD_PACKAGES: tuple[PackageSource, ...] = (
         key="lml",
         label=LML_LABEL,
         homepage=LML_PAGE,
+        provides=("vfs.asi",),
         expected_archive=LML_PACKAGE_NAME,
     ),
     PackageSource(
         key="scripthook_dotnet",
-        label=f"{DOTNET_LABEL} {DOTNET_VERSION}",
+        label=DOTNET_LABEL,
         homepage=DOTNET_PAGE,
+        provides=("ScriptHookRDRDotNet.asi",),
         download_url=DOTNET_DOWNLOAD,
         expected_archive="ScriptHookRDR2DotNet.rar",
     ),
 )
 
+DLSS_TWEAKS_PACKAGE = PackageSource(
+    key="dlsstweaks",
+    label=DLSS_TWEAKS_LABEL,
+    homepage=DLSS_TWEAKS_PAGE,
+    provides=DLSS_TWEAKS_CORE,
+    expected_archive=DLSS_TWEAKS_EXPECTED,
+)
+
+OPTIONAL_ADDONS: tuple[PackageSource, ...] = (DLSS_TWEAKS_PACKAGE,)
+
 REQUIRED_BINARIES = (
     ("ScriptHookRDR2.dll", SCRIPT_HOOK_LABEL, SCRIPT_HOOK_PAGE),
     ("dinput8.dll", ASI_LOADER_LABEL, ASI_LOADER_PAGE),
     ("vfs.asi", LML_LABEL, LML_PAGE),
-    ("ScriptHookRDRDotNet.asi", f"{DOTNET_LABEL} {DOTNET_VERSION}", DOTNET_PAGE),
+    ("ScriptHookRDRDotNet.asi", DOTNET_LABEL, DOTNET_PAGE),
 )
 
 PAYLOAD_FILES = (
@@ -122,13 +154,11 @@ class InfrastructureError(CompanionError):
 class AppConfig:
     game_directory: str | None = None
     active_profile: str = "modded_story"
-    redm_directory: str | None = None
 
     def to_dict(self) -> dict[str, str | None]:
         return {
             "game_directory": self.game_directory,
             "active_profile": self.active_profile,
-            "redm_directory": self.redm_directory,
         }
 
 
@@ -147,8 +177,62 @@ class DeployResult:
     notes: list[str] = field(default_factory=list)
 
 
+@dataclass
+class PackageInstallOutcome:
+    package: PackageSource
+    status: str
+    detail: str
+    deploy: DeployResult | None = None
+
+
+@dataclass
+class InstallMissingResult:
+    outcomes: list[PackageInstallOutcome] = field(default_factory=list)
+
+    def short_summary(self) -> str:
+        """Compact package list for dialogs."""
+        if not self.outcomes:
+            return "All standard infrastructure files are already present."
+        lines: list[str] = []
+        for item in self.outcomes:
+            mark = {"deployed": "OK", "failed": "Failed", "skipped": "Skipped"}.get(
+                item.status,
+                item.status,
+            )
+            lines.append(f"{mark}: {item.package.label}")
+        return "\n".join(lines)
+
+    def detail_summary(self) -> str:
+        """Expanded per-package detail for logs / Show Details."""
+        if not self.outcomes:
+            return "All standard infrastructure files are already present."
+        blocks: list[str] = []
+        for item in self.outcomes:
+            blocks.append(f"{item.package.label}\n  {item.status}: {item.detail}")
+        return "\n\n".join(blocks)
+
+    def summary(self) -> str:
+        return self.short_summary()
+
+    @property
+    def deployed(self) -> list[PackageInstallOutcome]:
+        return [item for item in self.outcomes if item.status == "deployed"]
+
+    @property
+    def failed(self) -> list[PackageInstallOutcome]:
+        return [item for item in self.outcomes if item.status == "failed"]
+
+    @property
+    def skipped(self) -> list[PackageInstallOutcome]:
+        return [item for item in self.outcomes if item.status == "skipped"]
+
+
+ProgressCallback = Callable[[str], None]
+ManualPackageCallback = Callable[[PackageSource], Path | None]
+
+
 class InfrastructureManager:
-    """Validate the RDR2 folder and copy a local ScriptHookRDR2 V2 or LML package into it."""
+    """Validate the RDR2 folder and install the standard Script Hook / LML stack."""
 
     def validate_game_directory(self, path: Path) -> Path:
         resolved = path.expanduser().resolve()
@@ -194,7 +278,176 @@ class InfrastructureManager:
                 homepage=LML_PAGE,
             )
         )
+        statuses.extend(self.optional_addon_status(game_dir))
         return statuses
+
+    def optional_addon_status(self, game_dir: Path) -> list[BinaryStatus]:
+        """Status rows for optional addons (not part of required missing installs)."""
+        game_dir = self.validate_game_directory(game_dir)
+        statuses: list[BinaryStatus] = []
+        for filename in DLSS_TWEAKS_CORE:
+            active = game_dir / filename
+            parked = game_dir / f"{filename}.off"
+            if active.is_file():
+                state = "present"
+                located = active
+            elif parked.is_file():
+                state = "quarantined"
+                located = parked
+            else:
+                state = "missing"
+                located = active
+            statuses.append(
+                BinaryStatus(
+                    filename=filename,
+                    label=DLSS_TWEAKS_LABEL,
+                    state=state,
+                    path=located,
+                    homepage=DLSS_TWEAKS_PAGE,
+                )
+            )
+        return statuses
+
+    def dlsstweaks_installed(self, game_dir: Path) -> bool:
+        game_dir = self.validate_game_directory(game_dir)
+        ini_ok = (game_dir / "dlsstweaks.ini").is_file()
+        loader = game_dir / "xinput9_1_0.dll"
+        parked = game_dir / "xinput9_1_0.dll.off"
+        return ini_ok and (loader.is_file() or parked.is_file())
+
+    def missing_packages(self, statuses: list[BinaryStatus] | None = None, game_dir: Path | None = None) -> list[PackageSource]:
+        """Return standard packages needed for any missing required binary.
+
+        Quarantined files count as present. The ``lml/`` folder alone does not
+        select a package; Lenny's Mod Loader is requested when ``vfs.asi`` is missing.
+        """
+        if statuses is None:
+            if game_dir is None:
+                raise InfrastructureError("Provide a health-check result or a game folder.")
+            statuses = self.health_check(game_dir)
+        missing = {
+            status.filename.casefold()
+            for status in statuses
+            if status.state == "missing" and not status.filename.endswith("/")
+        }
+        return [
+            package
+            for package in STANDARD_PACKAGES
+            if any(name.casefold() in missing for name in package.provides)
+        ]
+
+    def download_package(self, package: PackageSource, dest_dir: Path | None = None) -> Path:
+        """Download a package with a stable URL into the local cache."""
+        if not package.download_url:
+            raise InfrastructureError(
+                f"{package.label} has no stable download URL. "
+                "Open its page and deploy the archive manually."
+            )
+        cache = dest_dir or (app_data_dir() / "cache")
+        cache.mkdir(parents=True, exist_ok=True)
+        filename = package.expected_archive or Path(urlparse(package.download_url).path).name
+        if not filename:
+            raise InfrastructureError(f"Could not determine a filename for {package.label}.")
+        target = cache / filename
+        partial = cache / f"{filename}.partial"
+        try:
+            import requests
+        except ImportError as exc:
+            raise InfrastructureError("Downloading packages needs the requests package.") from exc
+        try:
+            with requests.get(
+                package.download_url,
+                stream=True,
+                timeout=DOWNLOAD_TIMEOUT_SECONDS,
+                allow_redirects=True,
+            ) as response:
+                response.raise_for_status()
+                with partial.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 64):
+                        if chunk:
+                            handle.write(chunk)
+        except requests.RequestException as exc:
+            partial.unlink(missing_ok=True)
+            raise InfrastructureError(f"Could not download {package.label}: {exc}") from exc
+        if not partial.is_file() or partial.stat().st_size == 0:
+            partial.unlink(missing_ok=True)
+            raise InfrastructureError(f"Download for {package.label} was empty.")
+        partial.replace(target)
+        return target
+
+    def install_missing(
+        self,
+        game_dir: Path,
+        *,
+        on_manual_needed: ManualPackageCallback,
+        progress: ProgressCallback | None = None,
+        packages: list[PackageSource] | None = None,
+        cache_dir: Path | None = None,
+    ) -> InstallMissingResult:
+        """Install missing stack packages via auto-download or a manual file picker."""
+        game_dir = self.validate_game_directory(game_dir)
+        needed = packages if packages is not None else self.missing_packages(game_dir=game_dir)
+        result = InstallMissingResult()
+        if not needed:
+            if progress:
+                progress("All standard infrastructure files are already present.")
+            return result
+
+        def report(message: str) -> None:
+            if progress:
+                progress(message)
+
+        for package in needed:
+            try:
+                if _package_needs_rar(package):
+                    from core.rar_support import ensure_rar_backend
+
+                    report(f"Preparing RAR support for {package.label}...")
+                    ensure_rar_backend(progress=report)
+                if package.download_url:
+                    report(f"Downloading {package.label}...")
+                    archive = self.download_package(package, cache_dir)
+                    report(f"Deploying {package.label}...")
+                    deploy = self.deploy_local(archive, game_dir)
+                    result.outcomes.append(
+                        PackageInstallOutcome(
+                            package=package,
+                            status="deployed",
+                            detail=_deploy_detail(deploy, source=archive.name),
+                            deploy=deploy,
+                        )
+                    )
+                    continue
+                report(f"Manual download required for {package.label}.")
+                selected = on_manual_needed(package)
+                if selected is None:
+                    result.outcomes.append(
+                        PackageInstallOutcome(
+                            package=package,
+                            status="skipped",
+                            detail="User skipped the manual package.",
+                        )
+                    )
+                    continue
+                report(f"Deploying {package.label}...")
+                deploy = self.deploy_local(selected, game_dir)
+                result.outcomes.append(
+                    PackageInstallOutcome(
+                        package=package,
+                        status="deployed",
+                        detail=_deploy_detail(deploy, source=selected.name),
+                        deploy=deploy,
+                    )
+                )
+            except CompanionError as exc:
+                result.outcomes.append(
+                    PackageInstallOutcome(
+                        package=package,
+                        status="failed",
+                        detail=str(exc),
+                    )
+                )
+        return result
 
     def deploy_local(self, source: Path, game_dir: Path) -> DeployResult:
         """Copy known loader files from a folder, zip, or rar into the game folder.
@@ -215,6 +468,56 @@ class InfrastructureManager:
             extract_root = Path(temporary)
             extract_archive(source, extract_root)
             return self._deploy_tree(extract_root, game_dir)
+
+    def install_dlsstweaks(self, game_dir: Path, source: Path) -> DeployResult:
+        """Deploy the Nexus ``1. DLSSTweaks for RDR2`` pack into the game folder.
+
+        Expects ``xinput9_1_0.dll``, ``dlsstweaks.ini``, and optionally
+        ``DLSSTweaksConfig.exe``. Configuration is left to the config tool / INI.
+        """
+        game_dir = self.validate_game_directory(game_dir)
+        source = source.expanduser().resolve()
+        if not source.exists():
+            raise InfrastructureError(f"Package not found: {source}")
+        if source.is_dir():
+            return self._deploy_dlsstweaks_tree(source, game_dir)
+        if source.suffix.casefold() in {".zip", ".rar"}:
+            from core.analyzer import extract_archive
+
+            with tempfile.TemporaryDirectory(prefix="dlsstweaks_") as temporary:
+                extract_root = Path(temporary)
+                extract_archive(source, extract_root)
+                return self._deploy_dlsstweaks_tree(extract_root, game_dir)
+        raise InfrastructureError("Deploy a folder, .zip, or .rar DLSSTweaks package.")
+
+    def _deploy_dlsstweaks_tree(self, root: Path, game_dir: Path) -> DeployResult:
+        found = _find_dlsstweaks_files(root)
+        missing_core = [name for name in DLSS_TWEAKS_CORE if name.casefold() not in found]
+        if missing_core:
+            if "nvngx.dll" in found and "xinput9_1_0.dll" not in found:
+                raise InfrastructureError(
+                    "This looks like \"2. DLSSTweaks alternate loader\" (nvngx.dll). "
+                    "Download \"1. DLSSTweaks for RDR2\" instead "
+                    f"({', '.join(DLSS_TWEAKS_CORE)})."
+                )
+            raise InfrastructureError(
+                "DLSSTweaks for RDR2 files were not found. Expected "
+                f"{', '.join(DLSS_TWEAKS_CORE)}. On Nexus, download file "
+                "\"1. DLSSTweaks for RDR2\"."
+            )
+        result = DeployResult()
+        for key, source in found.items():
+            if key == "nvngx.dll":
+                continue
+            destination = game_dir / source.name
+            if source.resolve() == destination.resolve():
+                result.notes.append(f"{destination.name} is already in the game folder.")
+                continue
+            shutil.copy2(source, destination)
+            result.copied.append(destination)
+        if not result.copied and not result.notes:
+            result.notes.append("DLSSTweaks files were already in the game folder.")
+        return result
 
     def _deploy_tree(self, root: Path, game_dir: Path) -> DeployResult:
         found, lml_dir = _find_payload(root)
@@ -247,6 +550,45 @@ class InfrastructureManager:
         return result
 
 
+def _package_needs_rar(package: PackageSource) -> bool:
+    archive = (package.expected_archive or "").casefold()
+    url = (package.download_url or "").casefold()
+    return archive.endswith(".rar") or url.endswith(".rar")
+
+
+def _find_dlsstweaks_files(root: Path) -> dict[str, Path]:
+    wanted = {name.casefold() for name in (*DLSS_TWEAKS_FILES, "nvngx.dll")}
+    found: dict[str, Path] = {}
+    for directory in _candidate_dirs(root):
+        for path in directory.iterdir():
+            if not path.is_file():
+                continue
+            key = path.name.casefold()
+            if key not in wanted or key in found:
+                continue
+            found[key] = path
+    return found
+
+
+def _deploy_detail(deploy: DeployResult, *, source: str) -> str:
+    names = [path.name for path in deploy.copied]
+    if not names:
+        files = "no new files"
+    elif len(names) <= 2:
+        files = ", ".join(names)
+    else:
+        files = f"{len(names)} files ({names[0]}, …)"
+    detail = f"{files} from {source}"
+    extras = [
+        note
+        for note in deploy.notes
+        if "existing lml" in note.casefold() or "already in the game folder" in note.casefold()
+    ]
+    if extras:
+        detail = f"{detail}. {extras[0]}"
+    return detail
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     config_path = path or (app_data_dir() / "config.json")
     if not config_path.is_file():
@@ -259,11 +601,11 @@ def load_config(path: Path | None = None) -> AppConfig:
         raise CompanionError(f"Config file is not a JSON object: {config_path}")
     game_directory = data.get("game_directory")
     active_profile = data.get("active_profile")
-    redm_directory = data.get("redm_directory")
+    if active_profile == "redm":
+        active_profile = "vanilla_online"
     return AppConfig(
         game_directory=game_directory if isinstance(game_directory, str) and game_directory else None,
         active_profile=active_profile if isinstance(active_profile, str) and active_profile else "modded_story",
-        redm_directory=redm_directory if isinstance(redm_directory, str) and redm_directory else None,
     )
 
 
