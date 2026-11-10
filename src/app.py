@@ -25,9 +25,10 @@ from core.infrastructure import InfrastructureManager, load_config
 from core.manifest import ManifestStore
 from core.profiles import ProfileSwitcher
 from ui.main_window import MainWindow
+from version import __version__
 
 APP_NAME = "Jack's LML Companion"
-APP_VERSION = "0.1.0"
+APP_VERSION = __version__
 
 
 def _app_icon() -> QIcon:

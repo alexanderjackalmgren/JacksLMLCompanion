@@ -1,12 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for Jack's LML Companion."""
 
+import re
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
 
 ROOT = Path(SPECPATH)
 SRC = ROOT / "src"
+
+_version_text = (SRC / "version.py").read_text(encoding="utf-8")
+_match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', _version_text)
+APP_VERSION = _match.group(1) if _match else "0.0.0"
+EXE_NAME = f"JacksLMLCompanion-{APP_VERSION}"
 
 pyqt_datas, pyqt_binaries, pyqt_hiddenimports = collect_all("PyQt6")
 
@@ -39,7 +45,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="JacksLMLCompanion",
+    name=EXE_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

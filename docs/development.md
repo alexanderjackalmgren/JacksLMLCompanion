@@ -46,7 +46,9 @@ pip install pyinstaller
 pyinstaller JacksLMLCompanion.spec
 ```
 
-The one-file, no-console executable is written to `dist/JacksLMLCompanion.exe`. The spec bundles `assets/` (app icon + Story/Online banners) and PyQt6 image plugins so TIFF banners load in the frozen build.
+The one-file, no-console executable is written to `dist/JacksLMLCompanion-<version>.exe` (version from `src/version.py`). The spec bundles `assets/` (app icon + Story/Online banners) and PyQt6 image plugins so TIFF banners load in the frozen build.
+
+Versioning: bump `src/version.py` for releases. Window title and the baked filename both use that value. Tag git as `v<version>` (for example `v1.0.0`).
 
 Config, `mod_manifests/`, `cache/`, `tools/`, and staging data are stored beside that executable. In a source checkout they are stored in the project root.
 

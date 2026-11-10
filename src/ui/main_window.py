@@ -7,7 +7,7 @@ import webbrowser
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QPropertyAnimation, QRectF, QUrl, Qt, QThread, QTimer, pyqtProperty, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QPainter, QPainterPath, QPen, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QDesktopServices, QPainter, QPainterPath, QPalette, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -55,11 +55,34 @@ QTabBar::tab:selected { background: #3d3428; color: #f0d7a4; }
 QPushButton { background: #3d3428; color: #f2efe9; border: 1px solid #6b5840; padding: 6px 12px; }
 QPushButton:hover { background: #4d4032; }
 QPushButton:disabled { color: #8a8175; border-color: #3a342c; }
-QLineEdit, QPlainTextEdit, QTableWidget {
+QLineEdit, QPlainTextEdit {
     background: #141311;
     color: #f2efe9;
     border: 1px solid #3a342c;
     selection-background-color: #4d4032;
+    selection-color: #f2efe9;
+}
+QTableWidget {
+    background: #141311;
+    color: #f2efe9;
+    border: 1px solid #3a342c;
+    gridline-color: #3a342c;
+    alternate-background-color: #221f1c;
+    selection-background-color: #4d4032;
+    selection-color: #f2efe9;
+}
+QTableWidget::item {
+    color: #f2efe9;
+    background: #141311;
+}
+QTableWidget::item:alternate {
+    background: #221f1c;
+    color: #f2efe9;
+}
+QTableWidget::item:selected,
+QTableWidget::item:alternate:selected {
+    background: #4d4032;
+    color: #f2efe9;
 }
 QHeaderView::section { background: #2a2622; color: #f0d7a4; border: none; padding: 6px; }
 """
@@ -1242,6 +1265,15 @@ def _table(headers: list[str]) -> QTableWidget:
     table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     table.verticalHeader().setVisible(False)
     table.setAlternatingRowColors(True)
+    # Lock dark row colors so Windows light theme cannot wash out light text.
+    palette = table.palette()
+    palette.setColor(QPalette.ColorRole.Base, QColor("#141311"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#221f1c"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#f2efe9"))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor("#f2efe9"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#f2efe9"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#4d4032"))
+    table.setPalette(palette)
     header = table.horizontalHeader()
     header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     header.setStretchLastSection(True)
