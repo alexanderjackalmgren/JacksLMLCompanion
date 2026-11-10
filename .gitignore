@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+dist/
+build/
+*.spec
+config.json
+profile_state.json
+mod_manifests/
+staging/
