@@ -1,6 +1,6 @@
-# Jack's LML Companion
+# Jack's RDR2 Mod Manager
 
-**Jack's LML Companion** is a modern mod manager and installer wrapper for **Red Dead Redemption 2 (RDR2)**, built to replace Lenny's outdated official companion GUI (`ModManager.UI.exe`).
+**Jack's RDR2 Mod Manager** is a modern mod manager and installer wrapper for **Red Dead Redemption 2 (RDR2)**, built to augment Lenny's official companion GUI (`ModManager.UI.exe`).
 
 ## Core Features
 - **Foolproof Archive Ingestion:** Automatically normalizes messy `.zip` and `.rar` files, extracts LML assets, and parses `install.xml` metadata.
